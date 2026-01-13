@@ -1,12 +1,16 @@
 import { NavLink } from "react-router-dom";
 
 const links = [
-  { to: "/", label: "Inicio", icon: "🏠" },
-  { to: "/registrar-corte", label: "Registrar corte", icon: "✂️" },
-  { to: "/barberos", label: "Barberos", icon: "🧔" },
-  { to: "/estado-diario", label: "Estado diario", icon: "🟡" },
-  { to: "/orden-barberos", label: "Orden de barberos", icon: "📋" },
-  { to: "/contabilidad", label: "Contabilidad", icon: "💰" },
+  { to: "/app", label: "Inicio", icon: "🏠" },
+  { to: "/app/registrar-corte", label: "Registrar corte", icon: "✂️" },
+  { to: "/app/barberos", label: "Barberos", icon: "🧔" },
+  { to: "/app/estado-diario", label: "Estado diario", icon: "🟡" },
+
+  // 🔹 NUEVO LINK — AGENDA DEL DÍA (ÚNICO CAMBIO)
+  { to: "/app/agenda-del-dia", label: "Agenda del día", icon: "📅" },
+
+  { to: "/app/orden-barberos", label: "Orden de barberos", icon: "📋" },
+  { to: "/app/contabilidad", label: "Contabilidad", icon: "💰" },
 ];
 
 export default function Sidebar() {

@@ -72,76 +72,80 @@ export default function Dashboard() {
     return x;
   }
 
-  function endOfDay(d) {
-    const x = new Date(d);
-    x.setHours(23, 59, 59, 999);
-    return x;
-  }
-
   function startOfMonth(d) {
     return new Date(d.getFullYear(), d.getMonth(), 1);
   }
 
-  function endOfMonth(d) {
-    return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-  }
-
+  // 🔴 SOLO SE TOCA ESTA FUNCIÓN
   async function cargarDashboard() {
     setLoading(true);
 
     const ahora = new Date();
-    const inicioDia = startOfDay(ahora);
-    const finDia = endOfDay(ahora);
-    const inicioMes = startOfMonth(ahora);
-    const finMes = endOfMonth(ahora);
+    const hoyStr = startOfDay(ahora).toISOString().slice(0, 10);
+    const inicioMesStr = startOfMonth(ahora).toISOString().slice(0, 10);
 
-    const { data, error } = await supabase
-      .from("cortes")
+    /* ========= INGRESOS ========= */
+
+    const { data: hoyRow } = await supabase
+      .from("resumen_contable_diario")
+      .select("total_ingresos")
+      .eq("fecha", hoyStr)
+      .maybeSingle();
+
+    const { data: mesRows } = await supabase
+      .from("resumen_contable_diario")
+      .select("total_ingresos")
+      .gte("fecha", inicioMesStr);
+
+    const totalDia = Number(hoyRow?.total_ingresos || 0);
+
+    let totalMes = 0;
+    (mesRows || []).forEach((r) => {
+      totalMes += Number(r.total_ingresos || 0);
+    });
+
+    setIngresosDia(totalDia);
+    setIngresosMes(totalMes);
+
+    /* ========= RANKING POR BARBERO ========= */
+
+    const { data: rankingRows, error } = await supabase
+      .from("resumen_contable_barbero_diario")
       .select(`
-        precio,
-        created_at,
+        barbero_id,
+        total_ingresos,
         barberos:barbero_id ( nombre )
       `)
-      .gte("created_at", inicioMes.toISOString())
-      .lte("created_at", finMes.toISOString());
+      .gte("fecha", inicioMesStr);
 
     if (error) {
-      console.error("Error dashboard:", error);
+      console.error("Error ranking:", error);
       setLoading(false);
       return;
     }
 
-    let totalDia = 0;
-    let totalMes = 0;
     const acumulado = {};
 
-    (data || []).forEach((c) => {
-      const precio = Number(c.precio || 0);
-      const nombre = c.barberos?.nombre || "Sin nombre";
-      const fecha = new Date(c.created_at);
-
-      totalMes += precio;
-      if (fecha >= inicioDia && fecha <= finDia) totalDia += precio;
-
-      if (!acumulado[nombre]) {
-        acumulado[nombre] = { nombre, total: 0, cortes: 0 };
+    (rankingRows || []).forEach((r) => {
+      const id = r.barbero_id;
+      if (!acumulado[id]) {
+        acumulado[id] = {
+          nombre: r.barberos?.nombre || "Sin nombre",
+          total: 0,
+        };
       }
-
-      acumulado[nombre].total += precio;
-      acumulado[nombre].cortes += 1;
+      acumulado[id].total += Number(r.total_ingresos || 0);
     });
 
-    const rankingOrdenado = Object.values(acumulado).sort(
+    const rankingFinal = Object.values(acumulado).sort(
       (a, b) => b.total - a.total
     );
 
-    setIngresosDia(totalDia);
-    setIngresosMes(totalMes);
-    setRanking(rankingOrdenado);
-    setGraficoPorBarbero(
-      rankingOrdenado.map((b) => ({ nombre: b.nombre, total: b.total }))
-    );
-    setBarberoDelMes(rankingOrdenado[0] || null);
+    setRanking(rankingFinal);
+    setGraficoPorBarbero(rankingFinal);
+
+    setBarberoDelMes(rankingFinal[0] || null);
+
     setLoading(false);
   }
 
@@ -153,32 +157,38 @@ export default function Dashboard() {
       <h1 className="text-2xl font-bold mb-1">Inicio</h1>
       <p className="text-gray-500 mb-6">Resumen general de la barbería</p>
 
-      {/* ===== ESTADO ACTUAL ===== */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <EstadoCard
-          titulo="Disponible"
-          color="green"
-          lista={estadoResumen.disponible}
-        />
-        <EstadoCard
-          titulo="En almuerzo"
-          color="yellow"
-          lista={estadoResumen.en_almuerzo}
-        />
-        <EstadoCard
-          titulo="No disponible"
-          color="red"
-          lista={estadoResumen.no_disponible}
-        />
+      <div className="bg-white border border-black rounded-xl p-6 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">
+            Estado operativo en tiempo real
+          </h2>
+          <span className="text-sm font-semibold text-green-600">● En vivo</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <EstadoCard
+            titulo="Disponible"
+            color="green"
+            lista={estadoResumen.disponible}
+          />
+          <EstadoCard
+            titulo="En almuerzo"
+            color="yellow"
+            lista={estadoResumen.en_almuerzo}
+          />
+          <EstadoCard
+            titulo="No disponible"
+            color="red"
+            lista={estadoResumen.no_disponible}
+          />
+        </div>
       </div>
 
-      {/* ===== INGRESOS ===== */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 max-w-3xl">
         <InfoCard titulo="💰 Ingresos del día" valor={ingresosDia} />
         <InfoCard titulo="📆 Ingresos del mes" valor={ingresosMes} />
       </div>
 
-      {/* ===== GRÁFICO ===== */}
       <div className="bg-white rounded-lg shadow p-4 mb-6">
         <h2 className="text-lg font-semibold mb-3">
           📊 Ingresos por barbero (mes actual)
@@ -201,23 +211,31 @@ export default function Dashboard() {
 }
 
 /* =======================
-   COMPONENTES SIMPLES
+   COMPONENTES
    ======================= */
 function EstadoCard({ titulo, color, lista }) {
-  const colores = {
-    green: "border-green-400 bg-green-50 text-green-700",
-    yellow: "border-yellow-400 bg-yellow-50 text-yellow-700",
-    red: "border-red-400 bg-red-50 text-red-700",
+  const estilos = {
+    green: { accent: "bg-green-500", text: "text-green-700" },
+    yellow: { accent: "bg-yellow-500", text: "text-yellow-700" },
+    red: { accent: "bg-red-500", text: "text-red-700" },
   };
 
   return (
-    <div className={`border rounded-lg p-4 ${colores[color]}`}>
-      <h3 className="font-semibold mb-2">{titulo}</h3>
+    <div className="relative bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+      <span
+        className={`absolute left-0 top-0 h-full w-1 rounded-l-lg ${estilos[color].accent}`}
+      />
+      <h3 className={`text-xs font-semibold uppercase mb-2 ${estilos[color].text}`}>
+        {titulo}
+      </h3>
+
       {lista.length === 0 ? (
-        <p className="text-sm text-gray-500">Ninguno</p>
+        <p className="text-sm text-gray-400">Ninguno</p>
       ) : (
         lista.map((n) => (
-          <p key={n} className="font-medium">{n}</p>
+          <p key={n} className="text-lg font-semibold text-gray-900">
+            {n}
+          </p>
         ))
       )}
     </div>

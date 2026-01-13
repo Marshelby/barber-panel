@@ -15,6 +15,13 @@ function formatHora(ts) {
   });
 }
 
+// NUEVO: formatea columnas tipo "time" (ej: "01:49:00" -> "01:49")
+function formatTimeValue(t) {
+  if (!t) return null;
+  const s = String(t);
+  return s.length >= 5 ? s.slice(0, 5) : s;
+}
+
 export default function EstadoDiario() {
   const [loading, setLoading] = useState(true);
   const [barberos, setBarberos] = useState([]);
@@ -38,21 +45,21 @@ export default function EstadoDiario() {
 
     const { data: estadosData } = await supabase
       .from("estado_actual")
-      .select("barbero_id, estado, updated_at, hora_vuelve")
+      .select("barbero_id, estado, updated_at, hora_vuelve, hora_colacion")
       .in("barbero_id", ids);
 
     const map = {};
     const sel = {};
     const horas = {};
-    const checks = {};
     const colacion = {};
+    const checks = {};
 
     estadosData.forEach((e) => {
       map[e.barbero_id] = e;
       sel[e.barbero_id] = e.estado;
-      horas[e.barbero_id] = e.hora_vuelve || "";
-      checks[e.barbero_id] = !e.hora_vuelve;
+      horas[e.barbero_id] = "";
       colacion[e.barbero_id] = "";
+      checks[e.barbero_id] = !e.hora_vuelve;
     });
 
     setBarberos(barberosData);
@@ -69,9 +76,36 @@ export default function EstadoDiario() {
     cargarTodo();
   }, []);
 
+  // 🔴 ÚNICO CAMBIO: Realtime
+  useEffect(() => {
+    const channel = supabase
+      .channel("estado-actual-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "estado_actual",
+        },
+        () => {
+          cargarTodo();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const actualizarEstado = async (id) => {
     const estado = selectedEstado[id];
-    const todoElDia = checkMarcado[id];
+
+    // ✅ FIX: checkMarcado solo aplica a "disponible" y "no_disponible"
+    const todoElDia =
+      estado === "disponible" || estado === "no_disponible"
+        ? checkMarcado[id]
+        : false; // en_almuerzo nunca debe forzar hora_vuelve a null
 
     if (estado === "disponible" && !todoElDia) {
       if (!horaColacion[id] || !horaVuelve[id]) {
@@ -84,7 +118,11 @@ export default function EstadoDiario() {
       }
     }
 
-    if (estado === "en_almuerzo" && !horaVuelve[id]) {
+    if (
+      (estado === "en_almuerzo" || estado === "no_disponible") &&
+      !todoElDia &&
+      !horaVuelve[id]
+    ) {
       setError((p) => ({
         ...p,
         [id]: "Debes indicar la hora de regreso.",
@@ -99,6 +137,8 @@ export default function EstadoDiario() {
       {
         barbero_id: id,
         estado,
+        hora_colacion:
+          estado === "disponible" && !todoElDia ? horaColacion[id] : null,
         hora_vuelve: todoElDia ? null : horaVuelve[id],
         updated_at: new Date().toISOString(),
       },
@@ -115,12 +155,17 @@ export default function EstadoDiario() {
     <div className="p-8">
       <div className="flex flex-col md:flex-row gap-4 mb-8">
         <h1 className="text-5xl font-extrabold">Estado diario</h1>
+
         <p className="text-xl font-semibold text-gray-600 max-w-4xl">
-          El chatbot se basa en estos estados para responder automáticamente{" "}
+          El <span className="font-bold text-black">chatbot</span> de la barbería
+          se basa en estos{" "}
+          <span className="font-bold text-black">estados</span> para responder
+          automáticamente{" "}
           <span className="text-green-600 font-bold">WhatsApp</span> a los
           clientes. Mantenerlos{" "}
           <span className="font-bold text-black">actualizados</span> es clave
-          para evitar errores y dar una buena atención.
+          para <span className="font-bold text-black">evitar errores</span> y
+          dar una <span className="font-bold text-black">buena atención</span>.
         </p>
       </div>
 
@@ -130,6 +175,32 @@ export default function EstadoDiario() {
           const meta = ESTADOS.find((e) => e.value === actual?.estado);
           const estado = selectedEstado[b.id];
           const esDisponible = estado === "disponible";
+          const esNoDisponible = estado === "no_disponible";
+          const esColacion = estado === "en_almuerzo";
+
+          let resumen = null;
+
+          if (actual?.estado === "no_disponible") {
+            resumen = actual.hora_vuelve
+              ? `Vuelve a las ${formatTimeValue(actual.hora_vuelve)}.`
+              : `No vuelve hoy.`;
+          }
+
+          if (actual?.estado === "en_almuerzo") {
+            resumen = actual.hora_vuelve
+              ? `Vuelve a las ${formatTimeValue(actual.hora_vuelve)}.`
+              : null;
+          }
+
+          if (actual?.estado === "disponible") {
+            if (actual.hora_colacion) {
+              resumen = `Se va a colación a las ${formatTimeValue(
+                actual.hora_colacion
+              )}.`;
+            } else {
+              resumen = `Disponible todo el día.`;
+            }
+          }
 
           return (
             <div
@@ -138,7 +209,7 @@ export default function EstadoDiario() {
             >
               <h2 className="text-xl font-semibold mb-2">{b.nombre}</h2>
 
-              <div className="text-sm mb-3">
+              <div className="text-sm mb-2">
                 Estado actual:{" "}
                 <span className={`font-semibold ${meta?.color}`}>
                   {meta?.label}
@@ -148,15 +219,22 @@ export default function EstadoDiario() {
                 </div>
               </div>
 
+              {resumen && (
+                <div className="text-sm font-semibold text-gray-700 mb-3">
+                  {resumen}
+                </div>
+              )}
+
               <select
                 className="w-full border border-black rounded-lg px-3 py-2 mb-3"
                 value={estado}
-                onChange={(e) =>
-                  setSelectedEstado((p) => ({
-                    ...p,
-                    [b.id]: e.target.value,
-                  }))
-                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setSelectedEstado((p) => ({ ...p, [b.id]: value }));
+                  if (value === "no_disponible") {
+                    setCheckMarcado((p) => ({ ...p, [b.id]: true }));
+                  }
+                }}
               >
                 {ESTADOS.map((e) => (
                   <option key={e.value} value={e.value}>
@@ -201,9 +279,7 @@ export default function EstadoDiario() {
                     }
                   />
 
-                  <div className="text-sm font-medium mb-1">
-                    Vuelve a las:
-                  </div>
+                  <div className="text-sm font-medium mb-1">Vuelve a las:</div>
                   <input
                     type="time"
                     disabled={checkMarcado[b.id]}
@@ -226,6 +302,59 @@ export default function EstadoDiario() {
                       Para escribir horas debes desmarcar “Todo el día”.
                     </p>
                   )}
+                </>
+              )}
+
+              {esColacion && (
+                <>
+                  <div className="text-sm font-medium mb-1">Vuelve a las:</div>
+                  <input
+                    type="time"
+                    className="w-full border border-black rounded-lg px-3 py-2"
+                    value={horaVuelve[b.id] || ""}
+                    onChange={(e) =>
+                      setHoraVuelve((p) => ({
+                        ...p,
+                        [b.id]: e.target.value,
+                      }))
+                    }
+                  />
+                </>
+              )}
+
+              {esNoDisponible && (
+                <>
+                  <label className="flex items-center gap-2 text-sm mb-2">
+                    <input
+                      type="checkbox"
+                      checked={checkMarcado[b.id]}
+                      onChange={(e) =>
+                        setCheckMarcado((p) => ({
+                          ...p,
+                          [b.id]: e.target.checked,
+                        }))
+                      }
+                    />
+                    No vuelve
+                  </label>
+
+                  <div className="text-sm font-medium mb-1">Vuelve a las:</div>
+                  <input
+                    type="time"
+                    disabled={checkMarcado[b.id]}
+                    className={`w-full border border-black rounded-lg px-3 py-2 ${
+                      checkMarcado[b.id]
+                        ? "opacity-50 cursor-not-allowed"
+                        : ""
+                    }`}
+                    value={horaVuelve[b.id] || ""}
+                    onChange={(e) =>
+                      setHoraVuelve((p) => ({
+                        ...p,
+                        [b.id]: e.target.value,
+                      }))
+                    }
+                  />
                 </>
               )}
 

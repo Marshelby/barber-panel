@@ -3,7 +3,6 @@ import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
 
 const PORCENTAJE_BARBERO = 50;
-const CORTE_ESPECIAL_ID = "__especial__";
 
 export default function RegistrarCorte() {
   const navigate = useNavigate();
@@ -24,6 +23,9 @@ export default function RegistrarCorte() {
   const [pinInput, setPinInput] = useState("");
   const [pinEliminacionReal, setPinEliminacionReal] = useState(null);
   const [corteEliminarId, setCorteEliminarId] = useState(null);
+
+  // ✅ NUEVO: error de PIN (solo para la modal)
+  const [pinError, setPinError] = useState(false);
 
   const [editando, setEditando] = useState(null);
   const [editBarberoId, setEditBarberoId] = useState("");
@@ -68,8 +70,7 @@ export default function RegistrarCorte() {
   }
 
   async function cargarCortesHoy() {
-    const hoy = new Date().toISOString().split("T")[0];
-
+    // ✅ AJUSTE ÚNICO: ahora "cortes" es tabla diaria, no filtramos por fecha
     const { data } = await supabase
       .from("cortes")
       .select(`
@@ -83,8 +84,6 @@ export default function RegistrarCorte() {
         barberos(nombre),
         tipos_corte(nombre,id)
       `)
-      .gte("created_at", `${hoy}T00:00:00`)
-      .lte("created_at", `${hoy}T23:59:59`)
       .order("created_at", { ascending: false });
 
     setCortesHoy(data || []);
@@ -135,15 +134,12 @@ export default function RegistrarCorte() {
 
     await supabase.from("cortes").insert({
       barbero_id: barberoId,
-      tipo_corte_id: tipoCorteId === CORTE_ESPECIAL_ID ? null : tipoCorteId,
+      tipo_corte_id: tipoCorteId,
       precio,
       porcentaje_barbero: PORCENTAJE_BARBERO,
       monto_barbero: montoBarbero,
       monto_barberia: montoBarberia,
-      nota:
-        tipoCorteId === CORTE_ESPECIAL_ID
-          ? nota || "Corte especial"
-          : nota || null,
+      nota: nota || null,
     });
 
     setBarberoId("");
@@ -158,7 +154,7 @@ export default function RegistrarCorte() {
   function iniciarEdicion(c) {
     setEditando(c.id);
     setEditBarberoId(c.barbero_id);
-    setEditTipo(c.tipos_corte?.id || CORTE_ESPECIAL_ID);
+    setEditTipo(c.tipos_corte?.id || "");
     setEditPrecio(c.precio);
     setEditNota(c.nota || "");
   }
@@ -171,14 +167,11 @@ export default function RegistrarCorte() {
       .from("cortes")
       .update({
         barbero_id: editBarberoId,
-        tipo_corte_id: editTipo === CORTE_ESPECIAL_ID ? null : editTipo,
+        tipo_corte_id: editTipo,
         precio: editPrecio,
         monto_barbero: montoBarbero,
         monto_barberia: montoBarberia,
-        nota:
-          editTipo === CORTE_ESPECIAL_ID
-            ? editNota || "Corte especial"
-            : editNota,
+        nota: editNota || null,
       })
       .eq("id", editando);
 
@@ -190,6 +183,7 @@ export default function RegistrarCorte() {
   async function abrirEliminar(corte) {
     setCorteEliminarId(corte.id);
     setPinInput("");
+    setPinError(false); // ✅ limpiar mensaje al abrir
 
     const { data: barbero } = await supabase
       .from("barberos")
@@ -219,7 +213,8 @@ export default function RegistrarCorte() {
 
   async function confirmarEliminar() {
     if (pinInput !== pinEliminacionReal) {
-      alert("PIN incorrecto");
+      // ✅ en vez de alert, mostramos el mensaje en la misma modal
+      setPinError(true);
       return;
     }
 
@@ -274,7 +269,7 @@ export default function RegistrarCorte() {
               ⚠ El barbero no está disponible.
               <button
                 type="button"
-                onClick={() => navigate("/estado-diario")}
+                onClick={() => navigate("/app/estado-diario")}
                 className="underline ml-1"
               >
                 Ir a Estado diario
@@ -287,12 +282,9 @@ export default function RegistrarCorte() {
             onChange={(e) => {
               const v = e.target.value;
               setTipoCorteId(v);
-              if (v === CORTE_ESPECIAL_ID) {
-                setPrecio(0);
-              } else {
-                const t = tiposCorte.find((x) => x.id === v);
-                setPrecio(t?.precio || 0);
-              }
+
+              const t = tiposCorte.find((x) => x.id === v);
+              setPrecio(t?.precio || 0);
             }}
             className="w-full border border-black p-2 rounded mb-2"
           >
@@ -302,17 +294,13 @@ export default function RegistrarCorte() {
                 {t.nombre} (${t.precio})
               </option>
             ))}
-            <option value={CORTE_ESPECIAL_ID}>Corte especial</option>
           </select>
 
           <input
             type="number"
             value={precio}
-            disabled={tipoCorteId !== CORTE_ESPECIAL_ID}
-            onChange={(e) => setPrecio(Number(e.target.value))}
-            className={`w-full border border-black p-2 rounded mb-2 ${
-              tipoCorteId !== CORTE_ESPECIAL_ID ? "bg-gray-100" : ""
-            }`}
+            disabled
+            className="w-full border border-black p-2 rounded mb-2 bg-gray-100"
           />
 
           <textarea
@@ -347,7 +335,7 @@ export default function RegistrarCorte() {
             >
               <div>
                 <div className="font-medium">
-                  {c.barberos.nombre} — {c.tipos_corte?.nombre || "Corte especial"}
+                  {c.barberos.nombre} — {c.tipos_corte?.nombre || "Sin tipo"}
                   <span className="text-sm text-zinc-500 ml-2">
                     · {formatearHora(c.created_at)}
                   </span>
@@ -401,12 +389,9 @@ export default function RegistrarCorte() {
               onChange={(e) => {
                 const v = e.target.value;
                 setEditTipo(v);
-                if (v === CORTE_ESPECIAL_ID) {
-                  setEditPrecio(0);
-                } else {
-                  const t = tiposCorte.find((x) => x.id === v);
-                  setEditPrecio(t?.precio || 0);
-                }
+
+                const t = tiposCorte.find((x) => x.id === v);
+                setEditPrecio(t?.precio || 0);
               }}
               className="w-full border border-black p-2 rounded mb-2"
             >
@@ -415,17 +400,13 @@ export default function RegistrarCorte() {
                   {t.nombre}
                 </option>
               ))}
-              <option value={CORTE_ESPECIAL_ID}>Corte especial</option>
             </select>
 
             <input
               type="number"
               value={editPrecio}
-              disabled={editTipo !== CORTE_ESPECIAL_ID}
-              onChange={(e) => setEditPrecio(Number(e.target.value))}
-              className={`w-full border border-black p-2 rounded mb-2 ${
-                editTipo !== CORTE_ESPECIAL_ID ? "bg-gray-100" : ""
-              }`}
+              disabled
+              className="w-full border border-black p-2 rounded mb-2 bg-gray-100"
             />
 
             <textarea
@@ -465,9 +446,18 @@ export default function RegistrarCorte() {
               type="password"
               placeholder="PIN"
               value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              className="w-full border border-black p-2 rounded mb-4"
+              onChange={(e) => {
+                setPinInput(e.target.value);
+                if (pinError) setPinError(false);
+              }}
+              className="w-full border border-black p-2 rounded mb-2"
             />
+
+            {pinError && (
+              <div className="text-sm text-red-600 mb-3">
+                ⚠ PIN incorrecto. Intenta nuevamente.
+              </div>
+            )}
 
             <div className="flex justify-end gap-2">
               <button

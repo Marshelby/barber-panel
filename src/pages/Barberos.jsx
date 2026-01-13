@@ -15,6 +15,12 @@ function formatFechaCL(dateStr) {
   return new Date(dateStr).toLocaleDateString("es-CL");
 }
 
+function formatDiaCL(dateStr) {
+  return new Date(dateStr).toLocaleDateString("es-CL", {
+    weekday: "long",
+  });
+}
+
 function agruparPorFecha(cortes) {
   return cortes.reduce((acc, c) => {
     const fecha = formatFechaCL(c.created_at);
@@ -50,6 +56,8 @@ export default function Barberos() {
   const [modalAbierto, setModalAbierto] = useState(false);
   const [barberoSeleccionado, setBarberoSeleccionado] = useState(null);
   const [tabModal, setTabModal] = useState("hoy");
+
+  const [cortesHoyBarbero, setCortesHoyBarbero] = useState([]);
   const [cortesMesBarbero, setCortesMesBarbero] = useState([]);
 
   useEffect(() => {
@@ -89,18 +97,20 @@ export default function Barberos() {
       estadosMap[e.barbero_id] = e.estado;
     });
 
-    const { data: cortesData } = await supabase
+    // 🔹 HOY
+    const { data: cortesHoy } = await supabase
       .from("cortes")
-      .select("barbero_id, created_at, monto_barbero");
+      .select("barbero_id, monto_barbero");
 
-    const inicioHoy = new Date();
-    inicioHoy.setHours(0, 0, 0, 0);
+    // 🔹 HISTÓRICO (MES)
+    const inicioMes = new Date();
+    inicioMes.setDate(1);
+    inicioMes.setHours(0, 0, 0, 0);
 
-    const inicioMes = new Date(
-      inicioHoy.getFullYear(),
-      inicioHoy.getMonth(),
-      1
-    );
+    const { data: cortesHistoricos } = await supabase
+      .from("cortes_historicos")
+      .select("barbero_id, monto_barbero, created_at")
+      .gte("created_at", inicioMes.toISOString());
 
     const statsMap = {};
     (barberosData || []).forEach((b) => {
@@ -112,22 +122,20 @@ export default function Barberos() {
       };
     });
 
-    (cortesData || []).forEach((c) => {
-      const fecha = new Date(c.created_at);
+    (cortesHoy || []).forEach((c) => {
       const s = statsMap[c.barbero_id];
       if (!s) return;
+      s.total_hoy += Number(c.monto_barbero || 0);
+      s.cortes_hoy += 1;
+      s.ganancia_mes += Number(c.monto_barbero || 0);
+      s.cortes_mes += 1;
+    });
 
-      const monto = Number(c.monto_barbero || 0);
-
-      if (fecha >= inicioMes) {
-        s.ganancia_mes += monto;
-        s.cortes_mes += 1;
-      }
-
-      if (fecha >= inicioHoy) {
-        s.total_hoy += monto;
-        s.cortes_hoy += 1;
-      }
+    (cortesHistoricos || []).forEach((c) => {
+      const s = statsMap[c.barbero_id];
+      if (!s) return;
+      s.ganancia_mes += Number(c.monto_barbero || 0);
+      s.cortes_mes += 1;
     });
 
     setBarberos(barberosData || []);
@@ -141,40 +149,36 @@ export default function Barberos() {
     setTabModal("hoy");
     setModalAbierto(true);
 
-    const inicioMes = new Date(
-      new Date().getFullYear(),
-      new Date().getMonth(),
-      1
-    );
-
-    const { data } = await supabase
+    const { data: hoy } = await supabase
       .from("cortes")
+      .select("created_at, precio, monto_barbero")
+      .eq("barbero_id", barbero.id)
+      .order("created_at", { ascending: false });
+
+    const inicioMes = new Date();
+    inicioMes.setDate(1);
+    inicioMes.setHours(0, 0, 0, 0);
+
+    const { data: historicos } = await supabase
+      .from("cortes_historicos")
       .select("created_at, precio, monto_barbero")
       .eq("barbero_id", barbero.id)
       .gte("created_at", inicioMes.toISOString())
       .order("created_at", { ascending: false });
 
-    setCortesMesBarbero(data || []);
+    setCortesHoyBarbero(hoy || []);
+    setCortesMesBarbero([...(historicos || []), ...(hoy || [])]);
   }
 
   function cerrarModal() {
     setModalAbierto(false);
     setBarberoSeleccionado(null);
+    setCortesHoyBarbero([]);
     setCortesMesBarbero([]);
   }
 
-  const inicioHoy = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }, []);
-
-  const cortesHoy = useMemo(
-    () => cortesMesBarbero.filter((c) => new Date(c.created_at) >= inicioHoy),
-    [cortesMesBarbero, inicioHoy]
-  );
-
-  const cortesAMostrar = tabModal === "hoy" ? cortesHoy : cortesMesBarbero;
+  const cortesAMostrar =
+    tabModal === "hoy" ? cortesHoyBarbero : cortesMesBarbero;
 
   const totalPeriodo = cortesAMostrar.reduce(
     (acc, c) => {
@@ -198,6 +202,11 @@ export default function Barberos() {
   return (
     <div className="p-6">
       <h1 className="text-4xl font-extrabold mb-8">Barberos</h1>
+
+      <p className="text-base font-semibold text-gray-700 -mt-6 mb-8">
+        Aquí puedes ver el rendimiento diario y mensual de cada barbero. Haz clic
+        en una tarjeta para ver el detalle.
+      </p>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {barberos.map((b) => {
@@ -262,9 +271,7 @@ export default function Barberos() {
                 <button
                   onClick={() => setTabModal("hoy")}
                   className={`px-6 py-2 font-semibold ${
-                    tabModal === "hoy"
-                      ? "bg-black text-white"
-                      : "bg-white"
+                    tabModal === "hoy" ? "bg-black text-white" : "bg-white"
                   }`}
                 >
                   📅 HOY
@@ -272,9 +279,7 @@ export default function Barberos() {
                 <button
                   onClick={() => setTabModal("mes")}
                   className={`px-6 py-2 font-semibold ${
-                    tabModal === "mes"
-                      ? "bg-black text-white"
-                      : "bg-white"
+                    tabModal === "mes" ? "bg-black text-white" : "bg-white"
                   }`}
                 >
                   📆 ESTE MES
@@ -320,6 +325,34 @@ export default function Barberos() {
                 <p className="text-center text-gray-500 py-10">
                   No hay cortes para mostrar
                 </p>
+              ) : tabModal === "mes" ? (
+                Object.entries(cortesAgrupados).map(([fecha, cortes]) => (
+                  <div key={fecha} className="mb-4">
+                    <div className="px-3 py-2 border-b bg-gray-50">
+                      <div className="font-bold">{fecha}</div>
+                      <div className="text-sm text-gray-500">
+                        {formatDiaCL(cortes[0].created_at)}
+                      </div>
+                    </div>
+
+                    <ul className="divide-y border rounded-b-lg">
+                      {cortes.map((c, i) => (
+                        <li key={i} className="py-3 px-3 flex justify-between">
+                          <span>{formatHoraCL(c.created_at)}</span>
+                          <span className="text-right">
+                            <div className="font-bold">
+                              ${Number(c.precio).toLocaleString("es-CL")}
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              Barbero: $
+                              {Number(c.monto_barbero).toLocaleString("es-CL")}
+                            </div>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))
               ) : (
                 <ul className="divide-y border rounded-lg">
                   {cortesAMostrar.map((c, i) => (

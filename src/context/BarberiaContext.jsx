@@ -8,25 +8,58 @@ export function BarberiaProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     async function fetchBarberia() {
       setLoading(true);
 
+      // 1️⃣ Obtener sesión activa
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        if (isMounted) {
+          setBarberia(null);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const userId = session.user.id;
+
+      // 2️⃣ Cargar barbería del usuario (1 usuario = 1 barbería)
       const { data, error } = await supabase
         .from("barberias")
         .select("*")
-        .limit(1)
-        .single();
+        .eq("owner_user_id", userId)
+        .limit(1);
 
-      if (!error) {
-        setBarberia(data);
-      } else {
+      if (!isMounted) return;
+
+      if (error) {
         console.error("Error cargando barbería:", error);
+        setBarberia(null);
+      } else {
+        setBarberia(data && data.length > 0 ? data[0] : null);
       }
 
       setLoading(false);
     }
 
     fetchBarberia();
+
+    // 3️⃣ Escuchar login / logout
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      fetchBarberia();
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   return (

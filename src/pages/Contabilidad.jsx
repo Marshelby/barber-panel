@@ -20,24 +20,53 @@ export default function Contabilidad() {
   }, [fecha, modo]);
 
   /* =========================
-     FECHAS
+     FECHAS (robusto)
   ========================= */
-  function getRango() {
-    if (modo === "dia") {
-      return {
-        inicio: `${fecha}T00:00:00`,
-        fin: `${fecha}T23:59:59`,
-      };
-    }
+  function getRangoDiaISO(yyyy_mm_dd) {
+    const start = new Date(`${yyyy_mm_dd}T00:00:00`);
+    const end = new Date(`${yyyy_mm_dd}T23:59:59.999`);
+    return { inicio: start.toISOString(), fin: end.toISOString() };
+  }
 
-    const f = new Date(fecha);
+  function getRangoMesISO(yyyy_mm_dd) {
+    const f = new Date(`${yyyy_mm_dd}T00:00:00`);
     const year = f.getFullYear();
-    const month = String(f.getMonth() + 1).padStart(2, "0");
+    const monthIndex = f.getMonth();
+
+    const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
+    const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
 
     return {
-      inicio: `${year}-${month}-01T00:00:00`,
-      fin: `${year}-${month}-31T23:59:59`,
+      inicio: start.toISOString(),
+      fin: end.toISOString(),
+      year,
+      monthIndex,
     };
+  }
+
+  /* =========================
+     HELPERS: MAP BARBEROS
+  ========================= */
+  async function getBarberosMap() {
+    const { data, error } = await supabase
+      .from("barberos")
+      .select("id, nombre");
+
+    if (error) throw error;
+
+    const map = {};
+    (data || []).forEach((b) => {
+      map[b.id] = b.nombre;
+    });
+    return map;
+  }
+
+  function attachBarberoNombre(lista, barberosMap) {
+    // Mantiene la forma esperada por el resto del archivo: c.barberos.nombre
+    return (lista || []).map((c) => ({
+      ...c,
+      barberos: { nombre: barberosMap[c.barbero_id] || "Sin nombre" },
+    }));
   }
 
   /* =========================
@@ -46,33 +75,122 @@ export default function Contabilidad() {
   async function fetchCortes() {
     setLoading(true);
 
-    const { inicio, fin } = getRango();
+    const hoyLocal = new Date().toLocaleDateString("en-CA");
 
-    const { data, error } = await supabase
-      .from("cortes")
-      .select(`
-        id,
-        precio,
-        monto_barbero,
-        monto_barberia,
-        created_at,
-        barberos:barbero_id (
-          nombre
-        )
-      `)
-      .gte("created_at", inicio)
-      .lte("created_at", fin)
-      .order("created_at", { ascending: true });
+    try {
+      // Cargamos el mapa de barberos 1 vez por fetch
+      const barberosMap = await getBarberosMap();
 
-    if (error) {
+      // ======================
+      // MODO DÍA
+      // ======================
+      if (modo === "dia") {
+        const { inicio, fin } = getRangoDiaISO(fecha);
+
+        // hoy -> cortes (puede seguir usando relación, pero lo dejamos consistente)
+        if (fecha === hoyLocal) {
+          const { data, error } = await supabase
+            .from("cortes")
+            .select(`
+              id,
+              precio,
+              monto_barbero,
+              monto_barberia,
+              created_at,
+              barbero_id
+            `)
+            .gte("created_at", inicio)
+            .lte("created_at", fin)
+            .order("created_at", { ascending: true });
+
+          if (error) throw error;
+
+          const lista = attachBarberoNombre(data || [], barberosMap);
+          setCortes(lista);
+          recalcular(lista);
+          setLoading(false);
+          return;
+        }
+
+        // no-hoy -> cortes_historicos
+        const { data, error } = await supabase
+          .from("cortes_historicos")
+          .select(`
+            id,
+            precio,
+            monto_barbero,
+            monto_barberia,
+            created_at,
+            barbero_id
+          `)
+          .gte("created_at", inicio)
+          .lte("created_at", fin)
+          .order("created_at", { ascending: true });
+
+        if (error) throw error;
+
+        const lista = attachBarberoNombre(data || [], barberosMap);
+        setCortes(lista);
+        recalcular(lista);
+        setLoading(false);
+        return;
+      }
+
+      // ======================
+      // MODO MES
+      // ======================
+      const { inicio, fin, year, monthIndex } = getRangoMesISO(fecha);
+
+      // 1) Históricos del mes
+      const { data: historicos, error: errHist } = await supabase
+        .from("cortes_historicos")
+        .select(`
+          id,
+          precio,
+          monto_barbero,
+          monto_barberia,
+          created_at,
+          barbero_id
+        `)
+        .gte("created_at", inicio)
+        .lte("created_at", fin);
+
+      if (errHist) throw errHist;
+
+      let listaFinal = attachBarberoNombre(historicos || [], barberosMap);
+
+      // 2) Si el mes seleccionado es el mes actual -> sumar cortes (hoy)
+      const now = new Date();
+      const esMesActual =
+        now.getFullYear() === year && now.getMonth() === monthIndex;
+
+      if (esMesActual) {
+        const { data: hoyData, error: errHoy } = await supabase
+          .from("cortes")
+          .select(`
+            id,
+            precio,
+            monto_barbero,
+            monto_barberia,
+            created_at,
+            barbero_id
+          `);
+
+        if (errHoy) throw errHoy;
+
+        const hoyAdj = attachBarberoNombre(hoyData || [], barberosMap);
+        listaFinal = [...listaFinal, ...hoyAdj];
+      }
+
+      listaFinal.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+      setCortes(listaFinal);
+      recalcular(listaFinal);
+    } catch (error) {
       console.error("Error contabilidad:", error);
       setCortes([]);
       setTopBarberos([]);
       setResumenBarberos([]);
-    } else {
-      const lista = data || [];
-      setCortes(lista);
-      recalcular(lista);
     }
 
     setLoading(false);
@@ -83,9 +201,7 @@ export default function Contabilidad() {
   ========================= */
   const cortesFiltrados = useMemo(() => {
     if (barberoFiltro === "todos") return cortes;
-    return cortes.filter(
-      (c) => c.barberos?.nombre === barberoFiltro
-    );
+    return cortes.filter((c) => c.barberos?.nombre === barberoFiltro);
   }, [cortes, barberoFiltro]);
 
   /* =========================
@@ -122,9 +238,7 @@ export default function Contabilidad() {
       acc[nombre].generado += Number(c.precio || 0);
     });
 
-    setResumenBarberos(
-      Object.values(acc).sort((a, b) => b.ganado - a.ganado)
-    );
+    setResumenBarberos(Object.values(acc).sort((a, b) => b.ganado - a.ganado));
   }
 
   const barberosDisponibles = useMemo(() => {
@@ -147,15 +261,13 @@ export default function Contabilidad() {
   );
 
   /* =========================
-     UI
+     UI (sin cambios)
   ========================= */
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-semibold">Contabilidad</h2>
 
-      {/* CONTROLES */}
       <div className="flex flex-wrap gap-6 items-start">
-        {/* Fecha */}
         <Box>
           <label className="label">Fecha</label>
           <input
@@ -166,7 +278,6 @@ export default function Contabilidad() {
           />
         </Box>
 
-        {/* Vista */}
         <Box>
           <p className="label mb-2">Vista</p>
           <div className="flex gap-2">
@@ -179,7 +290,6 @@ export default function Contabilidad() {
           </div>
         </Box>
 
-        {/* Barbero */}
         <Box>
           <label className="label">Barbero</label>
           <select
@@ -194,7 +304,6 @@ export default function Contabilidad() {
           </select>
         </Box>
 
-        {/* Top */}
         {barberoFiltro === "todos" && topBarberos.length > 0 && (
           <Box className="border-zinc-400">
             <p className="text-sm mb-2">🏆 Barberos del {modo}</p>
@@ -213,7 +322,6 @@ export default function Contabilidad() {
         <p>Cargando…</p>
       ) : (
         <>
-          {/* TABLA */}
           <div className="bg-white border border-black rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-zinc-100 border-b border-black">
@@ -246,14 +354,12 @@ export default function Contabilidad() {
             </table>
           </div>
 
-          {/* TOTALES */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Stat label="Total ingresos" value={totalIngresos} />
             <Stat label="Total barberos" value={totalBarberos} />
             <Stat label="Total local" value={totalLocal} />
           </div>
 
-          {/* RESUMEN */}
           {barberoFiltro === "todos" && (
             <div className="bg-white border border-black rounded-lg p-5">
               <h3 className="text-lg font-semibold mb-4">
@@ -267,9 +373,15 @@ export default function Contabilidad() {
                     className="border border-black rounded-lg p-4 bg-zinc-50"
                   >
                     <p className="font-semibold text-lg">{b.nombre}</p>
-                    <p>Cortes: <strong>{b.cortes}</strong></p>
-                    <p>Ganó: <strong>${b.ganado.toLocaleString()}</strong></p>
-                    <p>Generó: <strong>${b.generado.toLocaleString()}</strong></p>
+                    <p>
+                      Cortes: <strong>{b.cortes}</strong>
+                    </p>
+                    <p>
+                      Ganó: <strong>${b.ganado.toLocaleString()}</strong>
+                    </p>
+                    <p>
+                      Generó: <strong>${b.generado.toLocaleString()}</strong>
+                    </p>
                   </div>
                 ))}
               </div>
@@ -281,9 +393,6 @@ export default function Contabilidad() {
   );
 }
 
-/* =========================
-   COMPONENTES UI
-========================= */
 function Box({ children, className = "" }) {
   return (
     <div className={`bg-white border border-black rounded-lg p-4 ${className}`}>
@@ -317,11 +426,3 @@ function Stat({ label, value }) {
     </div>
   );
 }
-
-/* =========================
-   CLASES REUTILIZABLES
-========================= */
-// th → "px-4 py-2 font-semibold"
-// td → "px-4 py-2"
-// label → "text-sm text-zinc-600 block mb-1"
-// input → "border border-black rounded px-2 py-1 w-full"
