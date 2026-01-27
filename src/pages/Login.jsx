@@ -124,6 +124,22 @@ export default function Login() {
             {loading ? "Ingresando..." : "Ingresar"}
           </button>
 
+          <button
+            type="button"
+            onClick={() => navigate("/forgot-password")}
+            style={{
+              marginTop: 10,
+              background: "transparent",
+              border: "none",
+              color: "#555",
+              cursor: "pointer",
+              fontSize: 13,
+            }}
+          >
+            ¿Olvidaste tu contraseña?
+          </button>
+
+
           {error && (
             <p style={{ color: "#c00", marginTop: 12, fontSize: 13 }}>
               {error}
