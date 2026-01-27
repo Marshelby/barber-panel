@@ -12,15 +12,28 @@ import RegistrarCorte from "../pages/RegistrarCorte";
 import OrdenBarberos from "../pages/OrdenBarberos";
 import AgendaDelDia from "../pages/AgendaDelDia";
 
-// públicas
+// páginas públicas
 import Login from "../pages/Login";
 import EstadoPublico from "../pages/EstadoPublico";
+import ForgotPassword from "../pages/forgot-password";
+import ResetPassword from "../pages/reset-password";
 
 const router = createBrowserRouter([
-  // 🔓 LOGIN PÚBLICO
+  // 🔓 LOGIN
   {
     path: "/",
     element: <Login />,
+  },
+
+  // 🔓 RECUPERAR CONTRASEÑA
+  {
+    path: "/forgot-password",
+    element: <ForgotPassword />,
+  },
+
+  {
+    path: "/reset-password",
+    element: <ResetPassword />,
   },
 
   // 🔒 PANEL PRIVADO
